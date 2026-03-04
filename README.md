@@ -1,6 +1,6 @@
-# ArUco Marker Detection and Object Localization
+# ArUco Marker Detection, Object Localization, and Shape Classification
 
-A computer vision project that uses ArUco markers to establish a calibrated reference plane and detect black objects within a 400×400mm workspace. The system performs perspective transformation to convert angled camera views into top-down coordinates with real-world spatial accuracy.
+A computer vision project that uses ArUco markers to establish a calibrated reference plane, detect black objects within a 400×400mm workspace, and classify their shape (circle vs. square) using a trained CNN. The system performs perspective transformation to convert angled camera views into top-down coordinates with real-world spatial accuracy.
 
 ## Project Overview
 
@@ -19,6 +19,7 @@ This project implements a vision-based object detection and localization system 
 - **OpenCV** (cv2) - Computer vision library
 - **NumPy** - Numerical computing
 - **Matplotlib** - Visualization
+- **TensorFlow 2.x** - CNN training (required for `augment_and_train.py`)
 - **USB Webcam** - For image capture
 
 ## Installation
@@ -28,13 +29,13 @@ This project implements a vision-based object detection and localization system 
 ```bash
 conda create -n ME446_Vision python=3.10
 conda activate ME446_Vision
-pip install opencv-python numpy matplotlib
+pip install opencv-python numpy matplotlib tensorflow
 ```
 
 ### Using pip
 
 ```bash
-pip install opencv-python numpy matplotlib
+pip install opencv-python numpy matplotlib tensorflow
 ```
 
 ## Quick Start
@@ -127,13 +128,19 @@ Run cell 11 to calculate the true 3D centroid position, accounting for the block
 
 ```
 ME446_Vision/
+├── collect_data.py                  # Automated training image capture
+├── augment_and_train.py             # Data augmentation + CNN training
 ├── ArUco_detection_mapping.ipynb    # Main notebook with all steps
 ├── README.md                         # This file
 ├── aruco_marker_0.png               # Generated marker (top-left)
 ├── aruco_marker_1.png               # Generated marker (top-right)
 ├── aruco_marker_2.png               # Generated marker (bottom-right)
 ├── aruco_marker_3.png               # Generated marker (bottom-left)
-└── captured_frame.jpg               # Captured webcam image (generated at runtime)
+├── captured_frame.jpg               # Captured webcam image (generated at runtime)
+├── dataset/                          # Created at runtime by collect_data.py
+│   ├── circle/
+│   └── square/
+└── best_model.keras                  # Best trained model (generated at runtime)
 ```
 
 ## Configuration
@@ -165,6 +172,100 @@ Block 3D Centroid (accounting for height):
    Z = 12.70 mm (above the plane)
 ```
 
+## Shape Classification — Data Collection & Training
+
+### Overview
+
+`collect_data.py` captures training images using a USB webcam under a consistent camera stand, background, and lighting. `augment_and_train.py` augments those images and trains a CNN to classify shapes as **circle** or **square**.
+
+---
+
+### Step A — Collect Training Images
+
+```bash
+python collect_data.py
+```
+
+**What it does:**
+
+1. Creates `dataset/circle/` and `dataset/square/` directories.
+2. Counts any images already present (safe to restart mid-collection).
+3. Starts a 3-second countdown, then captures a frame every **2 seconds** automatically — you reposition/rotate the physical shape between captures.
+4. Shows a live preview window with a status overlay (class name + progress).
+5. After 200 circle images, prompts you to swap the shape, then collects 200 square images.
+
+**Keyboard controls:**
+
+| Key | Action |
+|-----|--------|
+| `p` | Pause / resume capture |
+| `q` | Quit early |
+
+**Configuration** (top of `collect_data.py`):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `IMAGES_PER_CLASS` | 200 | Images to collect per class |
+| `CAPTURE_INTERVAL` | 2 s | Seconds between automatic captures |
+| `COUNTDOWN_SECONDS` | 3 | Pre-capture countdown |
+| `CAMERA_INDEX` | 0 | USB camera index |
+| `CAMERA_WIDTH/HEIGHT` | 640×480 | Camera resolution |
+
+---
+
+### Step B — Train the CNN
+
+```bash
+python augment_and_train.py
+```
+
+**Augmentation strategy**
+
+Designed for a consistent background and lighting setup — only augments what genuinely varies during robot arm inference:
+
+| Augmentation | Value | Rationale |
+|---|---|---|
+| Rotation | ±45° | Shape can be oriented differently |
+| Width / height shift | ±20% | Shape won't always be centred |
+| Zoom | ±20% | Robot arm distance to shape varies |
+| Shear | ±10% | Slight perspective distortion |
+| Brightness | 85%–115% | Minor lighting drift |
+| Fill mode | `constant`, `cval=255` | Preserves white background |
+| Flips, heavy colour jitter | **disabled** | Not needed for this use case |
+
+- **Validation split**: 80% training / 20% validation
+- **Image size**: 128×128 px, grayscale, normalised to [0, 1]
+
+**CNN Architecture**
+
+```
+Input (128×128×1)
+│
+├── Conv2D(32) → BatchNorm → MaxPool(2×2)
+├── Conv2D(64) → BatchNorm → MaxPool(2×2)
+└── Conv2D(128) → BatchNorm → MaxPool(2×2)
+    │
+    Flatten → Dropout(0.5) → Dense(64, relu) → Dropout(0.3) → Dense(1, sigmoid)
+```
+
+- **Loss**: binary crossentropy
+- **Optimizer**: Adam
+- **EarlyStopping**: monitors `val_accuracy`, patience = 10, restores best weights
+- **ModelCheckpoint**: saves best model to `best_model.keras`
+- **Max epochs**: 50
+
+**Configuration** (top of `augment_and_train.py`):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATASET_DIR` | `dataset` | Path to collected images |
+| `IMG_SIZE` | (128, 128) | Resize target |
+| `BATCH_SIZE` | 32 | Training batch size |
+| `EPOCHS` | 50 | Maximum training epochs |
+| `MODEL_PATH` | `best_model.keras` | Output model file |
+
+---
+
 ## References
 
 - **ArUco Markers**: [OpenCV ArUco Documentation](https://docs.opencv.org/master/d5/dae/tutorial_aruco_detection.html)
@@ -181,4 +282,4 @@ Ronald Vasquez, Salwa Omar, Davyd Leonovets
 
 ---
 
-**Last Updated**: February 2026
+**Last Updated**: March 2026
